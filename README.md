@@ -137,3 +137,31 @@
 - DB：Supabase
 - デプロイ先：EAS
 - 使用予定ライブラリ：TypeScript、Zustand、Expo EAS
+
+## 11. 開発環境
+
+フロントエンドはExpo managed workflowのReact Nativeアプリです。1つのコードベースからiOS・Androidを対象にし、EAS Buildで各ストア向けビルドを作成します。Supabaseは認証・データベースのバックエンドとして使用します。
+
+### セットアップ
+
+1. Node.js 20以上とnpmをインストールする。
+2. `.env.example`を`.env`にコピーし、SupabaseのProject URLと anon keyを設定する。
+3. `npm install`を実行する。
+4. `npm start`でExpo Dev Serverを起動する。
+
+`npm run android`、`npm run ios`、`npm run web`で各ターゲットを起動できます。iOSシミュレーターはmacOSが必要です。Windows/WSLではAndroidエミュレーターまたは実機を使用してください。
+
+### Supabaseの方針
+
+アプリには公開可能なanon keyのみを設定し、service role keyは絶対にクライアントへ含めません。次のMVP実装では、Supabase AuthとRow Level Securityを有効にした以下のテーブルを追加します。
+
+- `profiles`: 利用者プロフィールと目標
+- `exercises`: 運動データベース
+- `prescriptions`: 利用者ごとの運動処方
+- `exercise_logs`: 実施記録、痛み、疲労感
+
+現時点の画面は接続情報が未設定でも起動でき、メニュー実施記録と痛みスケールを端末内で確認できます。Supabaseのプロジェクト作成後に`lib/supabase.ts`のクライアントを利用して永続化を接続します。
+
+### EAS Build
+
+初回のみ`eas login`と`eas build:configure`を実行し、`app.json`の`extra.eas.projectId`を自分のEAS Project IDへ置き換えます。その後、`eas build --platform all --profile preview`でiOS/Androidの検証ビルドを作成できます。

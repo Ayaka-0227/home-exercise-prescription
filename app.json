@@ -1,0 +1,25 @@
+{
+  "expo": {
+    "name": "Home Exercise Prescription",
+    "slug": "home-exercise-prescription",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "scheme": "homeexercise",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.example.homeexerciseprescription"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#F4EFE6"
+      },
+      "package": "com.example.homeexerciseprescription"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "replace-with-eas-project-id"
+      }
+    }
+  }
+}
