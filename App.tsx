@@ -21,6 +21,23 @@ type RegistrationFields = {
 
 type QuestionnaireAnswers = Record<string, string>;
 
+type QuestionnaireFieldConfig = {
+  id: string;
+  keyboardType?: 'default' | 'number-pad' | 'decimal-pad';
+  label: string;
+  optional?: boolean;
+  options?: readonly string[];
+  placeholder?: string;
+  unit?: string;
+};
+
+type QuestionnaireItem =
+  | { id: string; kind: 'single'; options: readonly string[]; title: string }
+  | { fields: readonly QuestionnaireFieldConfig[]; id: string; kind: 'fields'; title: string }
+  | { id: string; kind: 'multiSelect'; options: readonly string[]; title: string }
+  | { id: string; intensityLevels: readonly string[]; kind: 'painDetail'; parts: readonly string[]; timings: readonly string[]; title: string }
+  | { id: string; kind: 'checklist'; questions: readonly string[]; title: string };
+
 const colors = {
   main: '#78B7C5',
   mainText: '#2B3A42',
@@ -28,12 +45,46 @@ const colors = {
   subText: '#8CA1AF',
 } as const;
 
-const questionnaireItems = [
-  { id: 'body', title: '身体の悩み', options: ['肩や首の痛み', '腰や膝の痛み', '体力の低下', '特にない'] },
-  { id: 'daily', title: '日常生活', options: ['座っている時間が長い', '階段や歩行が不安', '家事や仕事で疲れやすい', '特に困っていない'] },
-  { id: 'exercise', title: '普段の運動習慣', options: ['ほとんどしていない', '週に1〜2回', '週に3回以上', '毎日している'] },
-  { id: 'environment', title: '運動環境', options: ['自宅で運動したい', '屋外で運動できる', '施設を利用できる', '環境について相談したい'] },
-  { id: 'goal', title: '目標', options: ['痛みをやわらげたい', '体力をつけたい', '動きを軽くしたい', '健康を維持したい'] },
+const questionnaireItems: readonly QuestionnaireItem[] = [
+  {
+    id: 'basic', title: '基本情報', kind: 'fields', fields: [
+      { id: 'age', label: '年齢', unit: '歳', keyboardType: 'number-pad' },
+      { id: 'height', label: '身長', unit: 'cm', keyboardType: 'decimal-pad' },
+      { id: 'weight', label: '体重', unit: 'kg', keyboardType: 'decimal-pad' },
+      { id: 'occupation', label: '職種', placeholder: '例: 事務職' },
+      { id: 'workPosture', label: '仕事中の姿勢', options: ['座り仕事が多い', '立ち仕事が多い', '身体を動かす仕事', 'その他'] },
+      { id: 'sittingHours', label: '1日に座っている時間', unit: '時間', keyboardType: 'decimal-pad' },
+      { id: 'dailySteps', label: '1日の歩数', optional: true, unit: '歩', keyboardType: 'number-pad' },
+    ],
+  },
+  { id: 'medicalHistory', title: '既往歴・医療情報', kind: 'multiSelect', options: ['高血圧', '糖尿病', '心疾患', '手術歴', '特になし'] },
+  { id: 'body', title: '身体の悩み', kind: 'single', options: ['肩や首の痛み', '腰や膝の痛み', '体力の低下', '特にない'] },
+  {
+    id: 'pain', title: '痛みについて', kind: 'painDetail',
+    parts: ['首・肩', '腰', '膝', '股関節', 'その他'],
+    intensityLevels: ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10'],
+    timings: ['安静時', '動作時', '朝方', '夕方以降', '常に'],
+  },
+  { id: 'daily', title: '日常生活', kind: 'single', options: ['座っている時間が長い', '階段や歩行が不安', '家事や仕事で疲れやすい', '特に困っていない'] },
+  { id: 'exercise', title: '運動習慣', kind: 'single', options: ['ほとんどしていない', '週に1〜2回', '週に3回以上', '毎日している'] },
+  { id: 'environment', title: '運動環境', kind: 'single', options: ['自宅で運動したい', '屋外で運動できる', '施設を利用できる', '環境について相談したい'] },
+  {
+    id: 'safety', title: '安全確認', kind: 'checklist', questions: [
+      '運動中に胸の痛みやめまいを感じたことがある',
+      '医師から運動を制限されている',
+      '安静時にも息切れがある',
+      '骨折や関節の手術を最近受けた',
+    ],
+  },
+  {
+    id: 'physicalCheck', title: '身体機能チェック', kind: 'checklist', questions: [
+      '5分以上続けて歩くことができる',
+      '手すりなしで階段の昇り降りができる',
+      '片足立ちで10秒以上バランスを保てる',
+      'しゃがんだ姿勢から自力で立ち上がれる',
+    ],
+  },
+  { id: 'goal', title: '目標', kind: 'single', options: ['痛みをやわらげたい', '体力をつけたい', '動きを軽くしたい', '健康を維持したい'] },
 ] as const;
 
 const birthYears = Array.from({ length: 101 }, (_, index) => String(new Date().getFullYear() - index));
@@ -51,22 +102,71 @@ export default function App() {
   const [gender, setGender] = useState('');
   const [questionnaireAnswers, setQuestionnaireAnswers] = useState<QuestionnaireAnswers>({});
   const [selectedQuestionnaireItemId, setSelectedQuestionnaireItemId] = useState<string | null>(null);
+  const [isLoginPasswordVisible, setIsLoginPasswordVisible] = useState(false);
   const [isPasswordVisible, setIsPasswordVisible] = useState(false);
   const [isPasswordConfirmationVisible, setIsPasswordConfirmationVisible] = useState(false);
   const selectedQuestionnaireItem = questionnaireItems.find((item) => item.id === selectedQuestionnaireItemId);
 
-  const handleLogin = () => {
-    if (!email.trim() || !password) {
+  const handleLogin = async () => {
+    const trimmedEmail = email.trim();
+    if (!trimmedEmail || !password) {
       setMessage('メールアドレスとパスワードを入力してください。');
       return;
     }
 
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) {
+      setMessage('メールアドレスの形式で入力してください。');
+      return;
+    }
+
+    if (!supabase) {
+      setMessage('ログインサービスの設定が完了していません。');
+      return;
+    }
+
     setMessage('');
+    const { error } = await supabase.auth.signInWithPassword({ email: trimmedEmail, password });
+
+    if (error) {
+      console.error('signInWithPassword error:', error.message, error.status);
+      setMessage('メールアドレスまたはパスワードが正しくありません。');
+      return;
+    }
+
     setScreen('questionnaire');
   };
 
-  const answerQuestionnaire = (itemId: string, answer: string) => {
-    setQuestionnaireAnswers((current) => ({ ...current, [itemId]: answer }));
+  const setQuestionnaireAnswer = (key: string, value: string) => {
+    setQuestionnaireAnswers((current) => ({ ...current, [key]: value }));
+  };
+
+  const toggleMultiSelectOption = (itemId: string, option: string) => {
+    setQuestionnaireAnswers((current) => {
+      const key = `${itemId}.options`;
+      const currentList = current[key] ? current[key].split('|') : [];
+      const nextList = currentList.includes(option) ? currentList.filter((value) => value !== option) : [...currentList, option];
+      return { ...current, [key]: nextList.join('|') };
+    });
+  };
+
+  const isQuestionnaireItemAnswered = (item: QuestionnaireItem): boolean => {
+    switch (item.kind) {
+      case 'single':
+        return Boolean(questionnaireAnswers[item.id]);
+      case 'fields':
+        return item.fields.every((field) => field.optional || Boolean(questionnaireAnswers[`${item.id}.${field.id}`]?.trim()));
+      case 'multiSelect': {
+        const selected = questionnaireAnswers[`${item.id}.options`];
+        const other = questionnaireAnswers[`${item.id}.other`];
+        return Boolean(selected || other?.trim());
+      }
+      case 'painDetail':
+        return Boolean(questionnaireAnswers[`${item.id}.part`] && questionnaireAnswers[`${item.id}.intensity`] && questionnaireAnswers[`${item.id}.timing`]);
+      case 'checklist':
+        return item.questions.every((_, index) => Boolean(questionnaireAnswers[`${item.id}.${index}`]));
+      default:
+        return false;
+    }
   };
 
   const updateRegistration = (field: keyof RegistrationFields, value: string) => {
@@ -138,47 +238,107 @@ export default function App() {
               <Text style={styles.questionnaireEyebrow}>MYREHA / PROFILE</Text>
               <Text style={styles.questionnaireTitle}>{selectedQuestionnaireItem ? selectedQuestionnaireItem.title : 'あなたのことを教えてください'}</Text>
             </View>
-            <Text style={styles.questionnaireCount}>{Object.keys(questionnaireAnswers).filter((itemId) => questionnaireItems.some((item) => item.id === itemId)).length}/{questionnaireItems.length}</Text>
+            <Text style={styles.questionnaireCount}>{questionnaireItems.filter(isQuestionnaireItemAnswered).length}/{questionnaireItems.length}</Text>
           </View>
-          <Text style={styles.questionnaireDescription}>{selectedQuestionnaireItem ? '当てはまるものを1つ選んでください。' : '回答したい項目を選んでください。'}</Text>
+          <Text style={styles.questionnaireDescription}>{selectedQuestionnaireItem ? '当てはまるものを選んでください。' : '回答したい項目を選んでください。'}</Text>
           {selectedQuestionnaireItem ? <>
             <Pressable accessibilityRole="button" onPress={() => setSelectedQuestionnaireItemId(null)} style={styles.questionnaireBackButton}>
               <Ionicons color={colors.mainText} name="chevron-back" size={18} />
               <Text style={styles.questionnaireBackButtonText}>項目一覧に戻る</Text>
             </Pressable>
-            <View style={[styles.questionnaireCard, questionnaireAnswers[selectedQuestionnaireItem.id] && styles.questionnaireCardAnswered]}>
+            <View style={[styles.questionnaireCard, isQuestionnaireItemAnswered(selectedQuestionnaireItem) && styles.questionnaireCardAnswered]}>
               <View style={styles.questionnaireCardHeader}>
                 <Text style={styles.questionnaireNumber}>QUESTION</Text>
-                {questionnaireAnswers[selectedQuestionnaireItem.id] ? <Text style={styles.answeredLabel}>回答済み</Text> : null}
+                {isQuestionnaireItemAnswered(selectedQuestionnaireItem) ? <Text style={styles.answeredLabel}>回答済み</Text> : null}
               </View>
-              <View style={styles.answerList}>
-                {selectedQuestionnaireItem.options.map((option) => <Pressable key={option} accessibilityRole="button" accessibilityState={{ selected: questionnaireAnswers[selectedQuestionnaireItem.id] === option }} onPress={() => answerQuestionnaire(selectedQuestionnaireItem.id, option)} style={[styles.answerButton, questionnaireAnswers[selectedQuestionnaireItem.id] === option && styles.answerButtonSelected]}>
+
+              {selectedQuestionnaireItem.kind === 'single' ? <View style={styles.answerList}>
+                {selectedQuestionnaireItem.options.map((option) => <Pressable key={option} accessibilityRole="button" accessibilityState={{ selected: questionnaireAnswers[selectedQuestionnaireItem.id] === option }} onPress={() => setQuestionnaireAnswer(selectedQuestionnaireItem.id, option)} style={[styles.answerButton, questionnaireAnswers[selectedQuestionnaireItem.id] === option && styles.answerButtonSelected]}>
                   <Text style={[styles.answerButtonText, questionnaireAnswers[selectedQuestionnaireItem.id] === option && styles.answerButtonTextSelected]}>{option}</Text>
                 </Pressable>)}
-              </View>
-              {selectedQuestionnaireItem.id === 'body' ? <View style={styles.bodyMeasurements}>
-                <View style={styles.questionnaireMeasurement}>
-                  <Text style={styles.questionnaireMeasurementLabel}>身長</Text>
-                  <View style={styles.questionnaireMeasurementInputRow}>
-                    <TextInput keyboardType="decimal-pad" onChangeText={(value) => answerQuestionnaire('height', value)} placeholder="例: 160" placeholderTextColor={colors.subText} style={styles.questionnaireMeasurementInput} value={questionnaireAnswers.height ?? ''} />
-                    <Text style={styles.questionnaireUnit}>cm</Text>
-                  </View>
+              </View> : null}
+
+              {selectedQuestionnaireItem.kind === 'fields' ? <View style={styles.fieldList}>
+                {selectedQuestionnaireItem.fields.map((field) => {
+                  const fieldKey = `${selectedQuestionnaireItem.id}.${field.id}`;
+                  if (field.options) {
+                    return <View key={field.id} style={styles.fieldBlock}>
+                      <Text style={styles.questionnaireMeasurementLabel}>{field.label}</Text>
+                      <View style={styles.answerList}>
+                        {field.options.map((option) => <Pressable key={option} accessibilityRole="button" onPress={() => setQuestionnaireAnswer(fieldKey, option)} style={[styles.answerButton, questionnaireAnswers[fieldKey] === option && styles.answerButtonSelected]}>
+                          <Text style={[styles.answerButtonText, questionnaireAnswers[fieldKey] === option && styles.answerButtonTextSelected]}>{option}</Text>
+                        </Pressable>)}
+                      </View>
+                    </View>;
+                  }
+                  return <View key={field.id} style={styles.questionnaireMeasurement}>
+                    <Text style={styles.questionnaireMeasurementLabel}>{field.label}{field.optional ? '（任意）' : ''}</Text>
+                    <View style={styles.questionnaireMeasurementInputRow}>
+                      <TextInput keyboardType={field.keyboardType ?? 'default'} onChangeText={(value) => setQuestionnaireAnswer(fieldKey, value)} placeholder={field.placeholder ?? ''} placeholderTextColor={colors.subText} style={styles.questionnaireMeasurementInput} value={questionnaireAnswers[fieldKey] ?? ''} />
+                      {field.unit ? <Text style={styles.questionnaireUnit}>{field.unit}</Text> : null}
+                    </View>
+                  </View>;
+                })}
+              </View> : null}
+
+              {selectedQuestionnaireItem.kind === 'multiSelect' ? <>
+                <View style={styles.answerList}>
+                  {selectedQuestionnaireItem.options.map((option) => {
+                    const optionsKey = `${selectedQuestionnaireItem.id}.options`;
+                    const selectedList = questionnaireAnswers[optionsKey] ? questionnaireAnswers[optionsKey].split('|') : [];
+                    const isSelected = selectedList.includes(option);
+                    return <Pressable key={option} accessibilityRole="button" accessibilityState={{ selected: isSelected }} onPress={() => toggleMultiSelectOption(selectedQuestionnaireItem.id, option)} style={[styles.answerButton, isSelected && styles.answerButtonSelected]}>
+                      <Text style={[styles.answerButtonText, isSelected && styles.answerButtonTextSelected]}>{option}</Text>
+                    </Pressable>;
+                  })}
                 </View>
                 <View style={styles.questionnaireMeasurement}>
-                  <Text style={styles.questionnaireMeasurementLabel}>体重</Text>
-                  <View style={styles.questionnaireMeasurementInputRow}>
-                    <TextInput keyboardType="decimal-pad" onChangeText={(value) => answerQuestionnaire('weight', value)} placeholder="例: 55" placeholderTextColor={colors.subText} style={styles.questionnaireMeasurementInput} value={questionnaireAnswers.weight ?? ''} />
-                    <Text style={styles.questionnaireUnit}>kg</Text>
-                  </View>
+                  <Text style={styles.questionnaireMeasurementLabel}>その他（自由記入）</Text>
+                  <TextInput onChangeText={(value) => setQuestionnaireAnswer(`${selectedQuestionnaireItem.id}.other`, value)} placeholder="該当する内容があれば入力してください" placeholderTextColor={colors.subText} style={styles.questionnaireFreeTextInput} value={questionnaireAnswers[`${selectedQuestionnaireItem.id}.other`] ?? ''} />
                 </View>
+              </> : null}
+
+              {selectedQuestionnaireItem.kind === 'painDetail' ? <>
+                <Text style={styles.questionnaireMeasurementLabel}>痛みの部位</Text>
+                <View style={styles.answerList}>
+                  {selectedQuestionnaireItem.parts.map((part) => <Pressable key={part} accessibilityRole="button" onPress={() => setQuestionnaireAnswer(`${selectedQuestionnaireItem.id}.part`, part)} style={[styles.answerButton, questionnaireAnswers[`${selectedQuestionnaireItem.id}.part`] === part && styles.answerButtonSelected]}>
+                    <Text style={[styles.answerButtonText, questionnaireAnswers[`${selectedQuestionnaireItem.id}.part`] === part && styles.answerButtonTextSelected]}>{part}</Text>
+                  </Pressable>)}
+                </View>
+                <Text style={[styles.questionnaireMeasurementLabel, styles.painSectionSpacing]}>痛みの強さ（0〜10）</Text>
+                <View style={styles.painScaleRow}>
+                  {selectedQuestionnaireItem.intensityLevels.map((level) => <Pressable key={level} accessibilityRole="button" onPress={() => setQuestionnaireAnswer(`${selectedQuestionnaireItem.id}.intensity`, level)} style={[styles.painScaleButton, questionnaireAnswers[`${selectedQuestionnaireItem.id}.intensity`] === level && styles.answerButtonSelected]}>
+                    <Text style={[styles.answerButtonText, questionnaireAnswers[`${selectedQuestionnaireItem.id}.intensity`] === level && styles.answerButtonTextSelected]}>{level}</Text>
+                  </Pressable>)}
+                </View>
+                <Text style={[styles.questionnaireMeasurementLabel, styles.painSectionSpacing]}>発症・悪化のタイミング</Text>
+                <View style={styles.answerList}>
+                  {selectedQuestionnaireItem.timings.map((timing) => <Pressable key={timing} accessibilityRole="button" onPress={() => setQuestionnaireAnswer(`${selectedQuestionnaireItem.id}.timing`, timing)} style={[styles.answerButton, questionnaireAnswers[`${selectedQuestionnaireItem.id}.timing`] === timing && styles.answerButtonSelected]}>
+                    <Text style={[styles.answerButtonText, questionnaireAnswers[`${selectedQuestionnaireItem.id}.timing`] === timing && styles.answerButtonTextSelected]}>{timing}</Text>
+                  </Pressable>)}
+                </View>
+              </> : null}
+
+              {selectedQuestionnaireItem.kind === 'checklist' ? <View style={styles.checklist}>
+                {selectedQuestionnaireItem.questions.map((question, index) => {
+                  const questionKey = `${selectedQuestionnaireItem.id}.${index}`;
+                  return <View key={questionKey} style={styles.checklistRow}>
+                    <Text style={styles.checklistQuestion}>{question}</Text>
+                    <View style={styles.checklistAnswerRow}>
+                      {['はい', 'いいえ'].map((option) => <Pressable key={option} accessibilityRole="button" onPress={() => setQuestionnaireAnswer(questionKey, option)} style={[styles.checklistOptionButton, questionnaireAnswers[questionKey] === option && styles.answerButtonSelected]}>
+                        <Text style={[styles.answerButtonText, questionnaireAnswers[questionKey] === option && styles.answerButtonTextSelected]}>{option}</Text>
+                      </Pressable>)}
+                    </View>
+                  </View>;
+                })}
               </View> : null}
             </View>
           </> : <View style={styles.questionnaireCategoryList}>{questionnaireItems.map((item, index) => {
-            const selectedAnswer = questionnaireAnswers[item.id];
-            return <Pressable key={item.id} accessibilityRole="button" onPress={() => setSelectedQuestionnaireItemId(item.id)} style={[styles.questionnaireCategoryButton, selectedAnswer && styles.questionnaireCategoryButtonAnswered]}>
-              <Text style={[styles.questionnaireNumber, selectedAnswer && styles.questionnaireNumberAnswered]}>{String(index + 1).padStart(2, '0')}</Text>
+            const isAnswered = isQuestionnaireItemAnswered(item);
+            return <Pressable key={item.id} accessibilityRole="button" onPress={() => setSelectedQuestionnaireItemId(item.id)} style={[styles.questionnaireCategoryButton, isAnswered && styles.questionnaireCategoryButtonAnswered]}>
+              <Text style={[styles.questionnaireNumber, isAnswered && styles.questionnaireNumberAnswered]}>{String(index + 1).padStart(2, '0')}</Text>
               <Text style={styles.questionnaireItemTitle}>{item.title}</Text>
-              {selectedAnswer ? <Text style={styles.answeredLabel}>回答済み</Text> : <Ionicons color={colors.subText} name="chevron-forward" size={20} />}
+              {isAnswered ? <Text style={styles.answeredLabel}>回答済み</Text> : <Ionicons color={colors.subText} name="chevron-forward" size={20} />}
             </Pressable>;
           })}</View>}
         </ScrollView> : screen === 'login' ? <View style={[styles.content, styles.loginContent]}>
@@ -205,7 +365,12 @@ export default function App() {
             <Text style={styles.label}>メールアドレス</Text>
             <TextInput autoCapitalize="none" autoComplete="email" keyboardType="email-address" onChangeText={setEmail} placeholder="example@email.com" placeholderTextColor="#9AA29A" style={styles.input} value={email} />
             <Text style={styles.label}>パスワード</Text>
-            <TextInput autoComplete="password" onChangeText={setPassword} placeholder="パスワードを入力" placeholderTextColor="#9AA29A" secureTextEntry style={styles.input} value={password} />
+            <View style={styles.passwordInputWrapper}>
+              <TextInput autoComplete="password" onChangeText={setPassword} placeholder="パスワードを入力" placeholderTextColor="#9AA29A" secureTextEntry={!isLoginPasswordVisible} style={[styles.input, styles.passwordInput]} value={password} />
+              <Pressable accessibilityLabel={isLoginPasswordVisible ? 'パスワードを隠す' : 'パスワードを表示'} accessibilityRole="button" hitSlop={10} onPress={() => setIsLoginPasswordVisible((current) => !current)} style={styles.passwordVisibilityButton}>
+                <Ionicons color="#9AA29A" name={isLoginPasswordVisible ? 'eye-off-outline' : 'eye-outline'} size={22} />
+              </Pressable>
+            </View>
             {message ? <Text style={styles.message}>{message}</Text> : null}
             <Pressable accessibilityRole="button" onPress={handleLogin} style={({ pressed }) => [styles.loginButton, pressed && styles.pressed]}><Text style={styles.loginButtonText}>ログイン</Text></Pressable>
             <Pressable accessibilityRole="button" onPress={() => { setMessage(''); setScreen('signUp'); }} style={({ pressed }) => [styles.signUpButton, pressed && styles.pressed]}><Text style={styles.signUpButtonText}>新規登録</Text></Pressable>
@@ -335,10 +500,20 @@ const styles = StyleSheet.create({
   answerButtonSelected: { backgroundColor: colors.main, borderColor: colors.main },
   answerButtonText: { color: colors.mainText, fontSize: 13, fontWeight: '600' },
   answerButtonTextSelected: { color: '#FFFFFF' },
-  bodyMeasurements: { flexDirection: 'row', gap: 10, marginTop: 14 },
+  fieldList: { gap: 16 },
+  fieldBlock: {},
+  painSectionSpacing: { marginTop: 16 },
+  painScaleRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  painScaleButton: { alignItems: 'center', backgroundColor: '#FFFFFF', borderColor: colors.main, borderRadius: 7, borderWidth: 1, height: 42, justifyContent: 'center', width: 42 },
+  checklist: { gap: 16 },
+  checklistRow: { gap: 8 },
+  checklistQuestion: { color: colors.mainText, fontSize: 14, fontWeight: '600', lineHeight: 20 },
+  checklistAnswerRow: { flexDirection: 'row', gap: 8 },
+  checklistOptionButton: { alignItems: 'center', backgroundColor: '#FFFFFF', borderColor: colors.main, borderRadius: 7, borderWidth: 1, flex: 1, height: 42, justifyContent: 'center' },
   questionnaireMeasurement: { flex: 1 },
   questionnaireMeasurementLabel: { color: colors.mainText, fontSize: 12, fontWeight: '700', marginBottom: 6 },
   questionnaireMeasurementInputRow: { alignItems: 'center', flexDirection: 'row' },
   questionnaireMeasurementInput: { backgroundColor: '#FFFFFF', borderColor: colors.main, borderRadius: 7, borderWidth: 1, color: colors.mainText, flex: 1, fontSize: 14, height: 42, paddingHorizontal: 10 },
+  questionnaireFreeTextInput: { backgroundColor: '#FFFFFF', borderColor: colors.main, borderRadius: 7, borderWidth: 1, color: colors.mainText, fontSize: 14, height: 42, paddingHorizontal: 10 },
   questionnaireUnit: { color: colors.mainText, fontSize: 12, fontWeight: '700', marginLeft: 6 },
 });
