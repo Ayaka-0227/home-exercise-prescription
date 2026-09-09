@@ -1,9 +1,8 @@
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
-import { Picker } from '@react-native-picker/picker';
 import { useState } from 'react';
-import { KeyboardAvoidingView, Platform, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
-import { supabase } from './lib/supabase';
+import { KeyboardAvoidingView, Modal, Platform, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { authRedirectUrl, supabase } from './lib/supabase';
 
 type RegistrationFields = {
   birthDay: string;
@@ -18,6 +17,8 @@ type RegistrationFields = {
   password: string;
   passwordConfirmation: string;
 };
+
+type DateField = 'birthYear' | 'birthMonth' | 'birthDay';
 
 type QuestionnaireAnswers = Record<string, string>;
 
@@ -105,7 +106,19 @@ export default function App() {
   const [isLoginPasswordVisible, setIsLoginPasswordVisible] = useState(false);
   const [isPasswordVisible, setIsPasswordVisible] = useState(false);
   const [isPasswordConfirmationVisible, setIsPasswordConfirmationVisible] = useState(false);
+  const [activeDateField, setActiveDateField] = useState<DateField | null>(null);
   const selectedQuestionnaireItem = questionnaireItems.find((item) => item.id === selectedQuestionnaireItemId);
+
+  const datePickerOptions: Record<DateField, readonly string[]> = {
+    birthYear: birthYears,
+    birthMonth: birthMonths,
+    birthDay: birthDays,
+  };
+  const datePickerLabels: Record<DateField, string> = {
+    birthYear: '年',
+    birthMonth: '月',
+    birthDay: '日',
+  };
 
   const handleLogin = async () => {
     const trimmedEmail = email.trim();
@@ -129,6 +142,10 @@ export default function App() {
 
     if (error) {
       console.error('signInWithPassword error:', error.message, error.status);
+      if (error.message.toLowerCase().includes('email not confirmed')) {
+        setMessage('確認メールのリンクを開いてメールアドレスを認証してから、もう一度ログインしてください。');
+        return;
+      }
       setMessage('メールアドレスまたはパスワードが正しくありません。');
       return;
     }
@@ -205,6 +222,7 @@ export default function App() {
       email: registration.email.trim(),
       password: registration.password,
       options: {
+        emailRedirectTo: authRedirectUrl,
         data: {
           birth_date: `${registration.birthYear}-${registration.birthMonth.padStart(2, '0')}-${registration.birthDay.padStart(2, '0')}`,
           full_name: `${registration.lastName.trim()} ${registration.firstName.trim()}`,
@@ -415,10 +433,23 @@ export default function App() {
           <View style={styles.genderRow}>{['女性', '男性', '回答しない'].map((option) => <Pressable key={option} accessibilityRole="button" onPress={() => setGender(option)} style={[styles.genderButton, gender === option && styles.genderButtonSelected]}><Text style={[styles.genderButtonText, gender === option && styles.genderButtonTextSelected]}>{option}</Text></Pressable>)}</View>
           <Text style={styles.label}>生年月日</Text>
           <View style={styles.birthDateRow}>
-            <View style={styles.datePickerContainer}><Picker onValueChange={(value) => updateRegistration('birthYear', value)} selectedValue={registration.birthYear} style={styles.datePicker}><Picker.Item label="年" value="" />{birthYears.map((year) => <Picker.Item key={year} label={`${year}年`} value={year} />)}</Picker></View>
-            <View style={styles.datePickerContainer}><Picker onValueChange={(value) => updateRegistration('birthMonth', value)} selectedValue={registration.birthMonth} style={styles.datePicker}><Picker.Item label="月" value="" />{birthMonths.map((month) => <Picker.Item key={month} label={`${month}月`} value={month} />)}</Picker></View>
-            <View style={styles.datePickerContainer}><Picker onValueChange={(value) => updateRegistration('birthDay', value)} selectedValue={registration.birthDay} style={styles.datePicker}><Picker.Item label="日" value="" />{birthDays.map((day) => <Picker.Item key={day} label={`${day}日`} value={day} />)}</Picker></View>
+            {(['birthYear', 'birthMonth', 'birthDay'] as const).map((field) => <Pressable accessibilityLabel={`${datePickerLabels[field]}を選択`} accessibilityRole="button" key={field} onPress={() => setActiveDateField(field)} style={styles.datePickerContainer}>
+              <Text style={[styles.datePickerText, !registration[field] && styles.datePickerPlaceholder]}>{registration[field] ? `${registration[field]}${datePickerLabels[field]}` : datePickerLabels[field]}</Text>
+            </Pressable>)}
           </View>
+          <Modal animationType="slide" onRequestClose={() => setActiveDateField(null)} transparent visible={activeDateField !== null}>
+            <View style={styles.datePickerModalBackdrop}>
+              <Pressable accessibilityRole="button" accessibilityLabel="閉じる" onPress={() => setActiveDateField(null)} style={styles.datePickerModalDismiss} />
+              <View style={styles.datePickerModalContent}>
+                <Text style={styles.datePickerModalTitle}>{activeDateField ? `${datePickerLabels[activeDateField]}を選択` : '生年月日を選択'}</Text>
+                <ScrollView style={styles.datePickerOptionList}>
+                  {activeDateField ? datePickerOptions[activeDateField].map((value) => <Pressable accessibilityRole="button" key={value} onPress={() => { updateRegistration(activeDateField, value); setActiveDateField(null); }} style={styles.datePickerOption}>
+                    <Text style={[styles.datePickerOptionText, registration[activeDateField] === value && styles.datePickerOptionTextSelected]}>{value}{datePickerLabels[activeDateField]}</Text>
+                  </Pressable>) : null}
+                </ScrollView>
+              </View>
+            </View>
+          </Modal>
           {message ? <Text style={styles.message}>{message}</Text> : null}
           <Pressable accessibilityRole="button" onPress={handleRegistration} style={({ pressed }) => [styles.loginButton, pressed && styles.pressed]}><Text style={styles.loginButtonText}>登録する</Text></Pressable>
         </ScrollView>}
@@ -462,8 +493,17 @@ const styles = StyleSheet.create({
   passwordInput: { paddingRight: 50 },
   passwordVisibilityButton: { alignItems: 'center', height: 52, justifyContent: 'center', position: 'absolute', right: 0, top: 0, width: 50 },
   birthDateRow: { flexDirection: 'row', gap: 8, marginBottom: 20 },
-  datePickerContainer: { backgroundColor: '#FFFFFF', borderColor: colors.sub, borderRadius: 8, borderWidth: 1, flex: 1, height: 52, justifyContent: 'center', overflow: 'hidden' },
-  datePicker: { color: colors.mainText, height: 52, width: '100%' },
+  datePickerContainer: { alignItems: 'center', backgroundColor: '#FFFFFF', borderColor: colors.sub, borderRadius: 8, borderWidth: 1, flex: 1, height: 52, justifyContent: 'center' },
+  datePickerText: { color: colors.mainText, fontSize: 16, fontWeight: '600' },
+  datePickerPlaceholder: { color: colors.subText, fontWeight: '400' },
+  datePickerModalBackdrop: { backgroundColor: 'rgba(43, 58, 66, 0.35)', flex: 1, justifyContent: 'flex-end' },
+  datePickerModalDismiss: { flex: 1 },
+  datePickerModalContent: { backgroundColor: '#FFFFFF', borderTopLeftRadius: 16, borderTopRightRadius: 16, maxHeight: '72%', padding: 24 },
+  datePickerModalTitle: { color: colors.mainText, fontSize: 18, fontWeight: '700', marginBottom: 12 },
+  datePickerOptionList: { flexGrow: 0 },
+  datePickerOption: { borderBottomColor: colors.sub, borderBottomWidth: 1, minHeight: 48, justifyContent: 'center' },
+  datePickerOptionText: { color: colors.mainText, fontSize: 16 },
+  datePickerOptionTextSelected: { color: colors.main, fontWeight: '700' },
   genderRow: { flexDirection: 'row', gap: 8, marginBottom: 20 },
   genderButton: { alignItems: 'center', backgroundColor: '#FFFFFF', borderColor: colors.sub, borderRadius: 8, borderWidth: 1, flex: 1, height: 48, justifyContent: 'center' },
   genderButtonSelected: { backgroundColor: colors.sub, borderColor: colors.main },
