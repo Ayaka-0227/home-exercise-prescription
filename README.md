@@ -160,6 +160,16 @@
 - `prescriptions`: 利用者ごとの運動処方
 - `exercise_logs`: 実施記録、痛み、疲労感
 
+### Supabase認証メールの設定
+
+モバイルアプリで確認メールのリンクを開くため、Supabase Dashboardの`Authentication`→`URL Configuration`→`Redirect URLs`に次のURLを追加します。
+
+```text
+homeexercise://auth/callback
+```
+
+別のリダイレクトURLを使用する場合は、`.env`に`EXPO_PUBLIC_AUTH_REDIRECT_URL`を設定し、同じURLをSupabaseのRedirect URLsにも追加してください。設定変更後はExpo Dev Serverまたはアプリを再起動してください。
+
 現時点の画面は接続情報が未設定でも起動でき、メニュー実施記録と痛みスケールを端末内で確認できます。Supabaseのプロジェクト作成後に`lib/supabase.ts`のクライアントを利用して永続化を接続します。
 
 ### EAS Build
