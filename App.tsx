@@ -1,7 +1,8 @@
 import { StatusBar } from 'expo-status-bar';
+import * as ImagePicker from 'expo-image-picker';
 import { Ionicons } from '@expo/vector-icons';
 import { useState } from 'react';
-import { KeyboardAvoidingView, Modal, Platform, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Image, KeyboardAvoidingView, Modal, Platform, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { authRedirectUrl, supabase } from './lib/supabase';
 
 type RegistrationFields = {
@@ -33,11 +34,11 @@ type QuestionnaireFieldConfig = {
 };
 
 type QuestionnaireItem =
-  | { id: string; kind: 'single'; options: readonly string[]; title: string }
+  | { detailFields?: Readonly<Record<string, QuestionnaireFieldConfig>>; id: string; kind: 'single'; options: readonly string[]; title: string }
   | { fields: readonly QuestionnaireFieldConfig[]; id: string; kind: 'fields'; title: string }
-  | { id: string; kind: 'multiSelect'; options: readonly string[]; title: string }
+  | { flexibilityParts?: readonly string[]; id: string; kind: 'multiSelect'; options: readonly string[]; postureParts?: readonly string[]; title: string }
   | { id: string; intensityLevels: readonly string[]; kind: 'painDetail'; parts: readonly string[]; timings: readonly string[]; title: string }
-  | { id: string; kind: 'checklist'; questions: readonly string[]; title: string };
+  | { id: string; kind: 'checklist'; photo?: { id: string; label: string }; questions: readonly string[]; title: string };
 
 const colors = {
   main: '#78B7C5',
@@ -53,13 +54,18 @@ const questionnaireItems: readonly QuestionnaireItem[] = [
       { id: 'height', label: '身長', unit: 'cm', keyboardType: 'decimal-pad' },
       { id: 'weight', label: '体重', unit: 'kg', keyboardType: 'decimal-pad' },
       { id: 'occupation', label: '職種', placeholder: '例: 事務職' },
+      { id: 'hobby', label: '趣味', optional: true, placeholder: '例: ウォーキング、旅行' },
       { id: 'workPosture', label: '仕事中の姿勢', options: ['座り仕事が多い', '立ち仕事が多い', '身体を動かす仕事', 'その他'] },
       { id: 'sittingHours', label: '1日に座っている時間', unit: '時間', keyboardType: 'decimal-pad' },
       { id: 'dailySteps', label: '1日の歩数', optional: true, unit: '歩', keyboardType: 'number-pad' },
     ],
   },
   { id: 'medicalHistory', title: '既往歴・医療情報', kind: 'multiSelect', options: ['高血圧', '糖尿病', '心疾患', '手術歴', '特になし'] },
-  { id: 'body', title: '身体の悩み', kind: 'single', options: ['肩や首の痛み', '腰や膝の痛み', '体力の低下', '特にない'] },
+  {
+    id: 'body', title: '身体の悩み', kind: 'multiSelect', options: ['肩こり', '姿勢', '体力低下', '体重増加', '柔軟性の低下', '特になし'],
+    postureParts: ['ストレートネック', '猫背', '反り腰'],
+    flexibilityParts: ['肩', '股関節', '足関節', 'その他'],
+  },
   {
     id: 'pain', title: '痛みについて', kind: 'painDetail',
     parts: ['首・肩', '腰', '膝', '股関節', 'その他'],
@@ -84,8 +90,17 @@ const questionnaireItems: readonly QuestionnaireItem[] = [
       '片足立ちで10秒以上バランスを保てる',
       'しゃがんだ姿勢から自力で立ち上がれる',
     ],
+    photo: { id: 'posturePhoto', label: '姿勢を撮影してください' },
   },
-  { id: 'goal', title: '目標', kind: 'single', options: ['痛みをやわらげたい', '体力をつけたい', '動きを軽くしたい', '健康を維持したい'] },
+  {
+    id: 'goal', title: '目標', kind: 'single', options: ['体力をつけたい', '減量', '増量', '趣味活動再開', 'その他'],
+    detailFields: {
+      '体力をつけたい': { id: 'runningDistance', keyboardType: 'decimal-pad', label: '何km走られるようにしたいか（任意）', optional: true, unit: 'km' },
+      '減量': { id: 'weightLoss', keyboardType: 'decimal-pad', label: '何kg減量したいか', unit: 'kg' },
+      '増量': { id: 'weightGain', keyboardType: 'decimal-pad', label: '何kg増量したいか', unit: 'kg' },
+      '趣味活動再開': { id: 'hobby', label: 'どんな趣味か' },
+    },
+  },
 ] as const;
 
 const birthYears = Array.from({ length: 101 }, (_, index) => String(new Date().getFullYear() - index));
@@ -158,29 +173,47 @@ export default function App() {
   };
 
   const toggleMultiSelectOption = (itemId: string, option: string) => {
+    toggleQuestionnaireList(`${itemId}.options`, option, option === '特になし');
+  };
+
+  const toggleQuestionnaireList = (key: string, option: string, isNoneOption = false) => {
     setQuestionnaireAnswers((current) => {
-      const key = `${itemId}.options`;
       const currentList = current[key] ? current[key].split('|') : [];
-      const nextList = currentList.includes(option) ? currentList.filter((value) => value !== option) : [...currentList, option];
+      const nextList = currentList.includes(option)
+        ? currentList.filter((value) => value !== option)
+        : isNoneOption
+          ? [option]
+          : [...currentList.filter((value) => value !== '特になし'), option];
       return { ...current, [key]: nextList.join('|') };
     });
   };
 
   const isQuestionnaireItemAnswered = (item: QuestionnaireItem): boolean => {
     switch (item.kind) {
-      case 'single':
-        return Boolean(questionnaireAnswers[item.id]);
+      case 'single': {
+        const selectedOption = questionnaireAnswers[item.id];
+        const detailField = selectedOption ? item.detailFields?.[selectedOption] : undefined;
+        return Boolean(selectedOption) && (!detailField || detailField.optional || Boolean(questionnaireAnswers[`${item.id}.${detailField.id}`]?.trim()));
+      }
       case 'fields':
         return item.fields.every((field) => field.optional || Boolean(questionnaireAnswers[`${item.id}.${field.id}`]?.trim()));
       case 'multiSelect': {
         const selected = questionnaireAnswers[`${item.id}.options`];
         const other = questionnaireAnswers[`${item.id}.other`];
-        return Boolean(selected || other?.trim());
+        if (!selected && !other?.trim()) return false;
+        if (item.postureParts && selected?.split('|').includes('姿勢') && !questionnaireAnswers[`${item.id}.postureParts`]) {
+          return false;
+        }
+        if (item.flexibilityParts && selected?.split('|').includes('柔軟性の低下')) {
+          return Boolean(questionnaireAnswers[`${item.id}.flexibilityParts`]);
+        }
+        return true;
       }
       case 'painDetail':
         return Boolean(questionnaireAnswers[`${item.id}.part`] && questionnaireAnswers[`${item.id}.intensity`] && questionnaireAnswers[`${item.id}.timing`]);
       case 'checklist':
-        return item.questions.every((_, index) => Boolean(questionnaireAnswers[`${item.id}.${index}`]));
+        return item.questions.every((_, index) => Boolean(questionnaireAnswers[`${item.id}.${index}`]))
+          && (!item.photo || Boolean(questionnaireAnswers[`${item.id}.${item.photo.id}`]));
       default:
         return false;
     }
@@ -188,6 +221,24 @@ export default function App() {
 
   const updateRegistration = (field: keyof RegistrationFields, value: string) => {
     setRegistration((current) => ({ ...current, [field]: value }));
+  };
+
+  const takePosturePhoto = async () => {
+    const permission = await ImagePicker.requestCameraPermissionsAsync();
+    if (!permission.granted) {
+      setMessage('姿勢の撮影にはカメラの許可が必要です。');
+      return;
+    }
+
+    const result = await ImagePicker.launchCameraAsync({
+      cameraType: ImagePicker.CameraType.back,
+      mediaTypes: ['images'],
+      quality: 0.8,
+    });
+    if (!result.canceled) {
+      setQuestionnaireAnswer('physicalCheck.posturePhoto', result.assets[0].uri);
+      setMessage('');
+    }
   };
 
   const handleRegistration = async () => {
@@ -271,9 +322,23 @@ export default function App() {
               </View>
 
               {selectedQuestionnaireItem.kind === 'single' ? <View style={styles.answerList}>
-                {selectedQuestionnaireItem.options.map((option) => <Pressable key={option} accessibilityRole="button" accessibilityState={{ selected: questionnaireAnswers[selectedQuestionnaireItem.id] === option }} onPress={() => setQuestionnaireAnswer(selectedQuestionnaireItem.id, option)} style={[styles.answerButton, questionnaireAnswers[selectedQuestionnaireItem.id] === option && styles.answerButtonSelected]}>
-                  <Text style={[styles.answerButtonText, questionnaireAnswers[selectedQuestionnaireItem.id] === option && styles.answerButtonTextSelected]}>{option}</Text>
-                </Pressable>)}
+                {selectedQuestionnaireItem.options.map((option) => {
+                  const isSelected = questionnaireAnswers[selectedQuestionnaireItem.id] === option;
+                  const detailField = selectedQuestionnaireItem.detailFields?.[option];
+                  const detailKey = detailField ? `${selectedQuestionnaireItem.id}.${detailField.id}` : '';
+                  return <View key={option}>
+                    <Pressable accessibilityRole="button" accessibilityState={{ selected: isSelected }} onPress={() => setQuestionnaireAnswer(selectedQuestionnaireItem.id, option)} style={[styles.answerButton, isSelected && styles.answerButtonSelected]}>
+                      <Text style={[styles.answerButtonText, isSelected && styles.answerButtonTextSelected]}>{option}</Text>
+                    </Pressable>
+                    {isSelected && detailField ? <View style={[styles.questionnaireMeasurement, styles.additionalConcernBlock]}>
+                      <Text style={styles.questionnaireMeasurementLabel}>{detailField.label}</Text>
+                      <View style={styles.questionnaireMeasurementInputRow}>
+                        <TextInput keyboardType={detailField.keyboardType ?? 'default'} onChangeText={(value) => setQuestionnaireAnswer(detailKey, value)} placeholder={detailField.placeholder ?? ''} placeholderTextColor={colors.subText} style={styles.questionnaireMeasurementInput} value={questionnaireAnswers[detailKey] ?? ''} />
+                        {detailField.unit ? <Text style={styles.questionnaireUnit}>{detailField.unit}</Text> : null}
+                      </View>
+                    </View> : null}
+                  </View>;
+                })}
               </View> : null}
 
               {selectedQuestionnaireItem.kind === 'fields' ? <View style={styles.fieldList}>
@@ -305,15 +370,43 @@ export default function App() {
                     const optionsKey = `${selectedQuestionnaireItem.id}.options`;
                     const selectedList = questionnaireAnswers[optionsKey] ? questionnaireAnswers[optionsKey].split('|') : [];
                     const isSelected = selectedList.includes(option);
-                    return <Pressable key={option} accessibilityRole="button" accessibilityState={{ selected: isSelected }} onPress={() => toggleMultiSelectOption(selectedQuestionnaireItem.id, option)} style={[styles.answerButton, isSelected && styles.answerButtonSelected]}>
-                      <Text style={[styles.answerButtonText, isSelected && styles.answerButtonTextSelected]}>{option}</Text>
-                    </Pressable>;
+                    return <View key={option}>
+                      <Pressable accessibilityRole="button" accessibilityState={{ selected: isSelected }} onPress={() => toggleMultiSelectOption(selectedQuestionnaireItem.id, option)} style={[styles.answerButton, isSelected && styles.answerButtonSelected]}>
+                        <Text style={[styles.answerButtonText, isSelected && styles.answerButtonTextSelected]}>{option}</Text>
+                      </Pressable>
+                      {option === '姿勢' && selectedQuestionnaireItem.postureParts && isSelected ? <View style={[styles.questionnaireMeasurement, styles.additionalConcernBlock]}>
+                        <Text style={styles.questionnaireMeasurementLabel}>気になる部位（複数選択）</Text>
+                        <View style={styles.answerList}>
+                          {selectedQuestionnaireItem.postureParts.map((part) => {
+                            const partsKey = `${selectedQuestionnaireItem.id}.postureParts`;
+                            const selectedParts = questionnaireAnswers[partsKey] ? questionnaireAnswers[partsKey].split('|') : [];
+                            const isPartSelected = selectedParts.includes(part);
+                            return <Pressable key={part} accessibilityRole="button" accessibilityState={{ selected: isPartSelected }} onPress={() => toggleQuestionnaireList(partsKey, part)} style={[styles.answerButton, isPartSelected && styles.answerButtonSelected]}>
+                              <Text style={[styles.answerButtonText, isPartSelected && styles.answerButtonTextSelected]}>{part}</Text>
+                            </Pressable>;
+                          })}
+                        </View>
+                      </View> : null}
+                      {option === '柔軟性の低下' && selectedQuestionnaireItem.flexibilityParts && isSelected ? <View style={[styles.questionnaireMeasurement, styles.additionalConcernBlock]}>
+                        <Text style={styles.questionnaireMeasurementLabel}>気になる部位（複数選択）</Text>
+                        <View style={styles.answerList}>
+                          {selectedQuestionnaireItem.flexibilityParts.map((part) => {
+                            const partsKey = `${selectedQuestionnaireItem.id}.flexibilityParts`;
+                            const selectedParts = questionnaireAnswers[partsKey] ? questionnaireAnswers[partsKey].split('|') : [];
+                            const isPartSelected = selectedParts.includes(part);
+                            return <Pressable key={part} accessibilityRole="button" accessibilityState={{ selected: isPartSelected }} onPress={() => toggleQuestionnaireList(partsKey, part)} style={[styles.answerButton, isPartSelected && styles.answerButtonSelected]}>
+                              <Text style={[styles.answerButtonText, isPartSelected && styles.answerButtonTextSelected]}>{part}</Text>
+                            </Pressable>;
+                          })}
+                        </View>
+                      </View> : null}
+                    </View>;
                   })}
                 </View>
-                <View style={styles.questionnaireMeasurement}>
+                {selectedQuestionnaireItem.id === 'medicalHistory' ? <View style={styles.questionnaireMeasurement}>
                   <Text style={styles.questionnaireMeasurementLabel}>その他（自由記入）</Text>
                   <TextInput onChangeText={(value) => setQuestionnaireAnswer(`${selectedQuestionnaireItem.id}.other`, value)} placeholder="該当する内容があれば入力してください" placeholderTextColor={colors.subText} style={styles.questionnaireFreeTextInput} value={questionnaireAnswers[`${selectedQuestionnaireItem.id}.other`] ?? ''} />
-                </View>
+                </View> : null}
               </> : null}
 
               {selectedQuestionnaireItem.kind === 'painDetail' ? <>
@@ -351,6 +444,15 @@ export default function App() {
                 })}
               </View> : null}
             </View>
+            {selectedQuestionnaireItem.kind === 'checklist' && selectedQuestionnaireItem.photo ? <View style={styles.photoCaptureBlock}>
+              <Text style={styles.photoCaptureTitle}>姿勢の写真</Text>
+              <Text style={styles.checklistQuestion}>{selectedQuestionnaireItem.photo.label}</Text>
+              <Pressable accessibilityRole="button" onPress={takePosturePhoto} style={styles.photoCaptureButton}>
+                <Ionicons color={colors.mainText} name="camera-outline" size={20} />
+                <Text style={styles.photoCaptureButtonText}>{questionnaireAnswers[`${selectedQuestionnaireItem.id}.${selectedQuestionnaireItem.photo.id}`] ? '撮り直す' : 'カメラを起動'}</Text>
+              </Pressable>
+              {questionnaireAnswers[`${selectedQuestionnaireItem.id}.${selectedQuestionnaireItem.photo.id}`] ? <Image accessibilityLabel="撮影した姿勢写真" source={{ uri: questionnaireAnswers[`${selectedQuestionnaireItem.id}.${selectedQuestionnaireItem.photo.id}`] }} style={styles.posturePhoto} /> : null}
+            </View> : null}
           </> : <View style={styles.questionnaireCategoryList}>{questionnaireItems.map((item, index) => {
             const isAnswered = isQuestionnaireItemAnswered(item);
             return <Pressable key={item.id} accessibilityRole="button" onPress={() => setSelectedQuestionnaireItemId(item.id)} style={[styles.questionnaireCategoryButton, isAnswered && styles.questionnaireCategoryButtonAnswered]}>
@@ -550,7 +652,13 @@ const styles = StyleSheet.create({
   checklistQuestion: { color: colors.mainText, fontSize: 14, fontWeight: '600', lineHeight: 20 },
   checklistAnswerRow: { flexDirection: 'row', gap: 8 },
   checklistOptionButton: { alignItems: 'center', backgroundColor: '#FFFFFF', borderColor: colors.main, borderRadius: 7, borderWidth: 1, flex: 1, height: 42, justifyContent: 'center' },
+  photoCaptureBlock: { backgroundColor: '#E6F2F5', borderColor: colors.main, borderRadius: 8, borderWidth: 1, gap: 10, marginTop: 16, padding: 12 },
+  photoCaptureTitle: { color: colors.mainText, fontSize: 16, fontWeight: '700' },
+  photoCaptureButton: { alignItems: 'center', backgroundColor: '#FFFFFF', borderColor: colors.main, borderRadius: 7, borderWidth: 1, flexDirection: 'row', gap: 8, justifyContent: 'center', minHeight: 42, paddingHorizontal: 12 },
+  photoCaptureButtonText: { color: colors.mainText, fontSize: 13, fontWeight: '700' },
+  posturePhoto: { alignSelf: 'center', borderRadius: 7, height: 220, width: '100%' },
   questionnaireMeasurement: { flex: 1 },
+  additionalConcernBlock: { backgroundColor: '#EAF4F0', borderColor: '#8FB9A4', borderRadius: 8, borderWidth: 1, marginBottom: 4, marginTop: 10, padding: 12 },
   questionnaireMeasurementLabel: { color: colors.mainText, fontSize: 12, fontWeight: '700', marginBottom: 6 },
   questionnaireMeasurementInputRow: { alignItems: 'center', flexDirection: 'row' },
   questionnaireMeasurementInput: { backgroundColor: '#FFFFFF', borderColor: colors.main, borderRadius: 7, borderWidth: 1, color: colors.mainText, flex: 1, fontSize: 14, height: 42, paddingHorizontal: 10 },
