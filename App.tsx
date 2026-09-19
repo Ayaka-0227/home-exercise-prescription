@@ -1,7 +1,8 @@
 import { StatusBar } from 'expo-status-bar';
 import * as ImagePicker from 'expo-image-picker';
 import { Ionicons } from '@expo/vector-icons';
-import { useState } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useEffect, useState } from 'react';
 import { Image, KeyboardAvoidingView, Modal, Platform, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { authRedirectUrl, supabase } from './lib/supabase';
 
@@ -22,6 +23,8 @@ type RegistrationFields = {
 type DateField = 'birthYear' | 'birthMonth' | 'birthDay';
 
 type QuestionnaireAnswers = Record<string, string>;
+
+const questionnaireAnswersStorageKey = 'myreha.questionnaireAnswers';
 
 type QuestionnaireFieldConfig = {
   id: string;
@@ -64,7 +67,7 @@ const questionnaireItems: readonly QuestionnaireItem[] = [
   {
     id: 'body', title: '身体の悩み', kind: 'multiSelect', options: ['肩こり', '姿勢', '体力低下', '体重増加', '柔軟性の低下', '特になし'],
     postureParts: ['ストレートネック', '猫背', '反り腰'],
-    flexibilityParts: ['肩', '股関節', '足関節', 'その他'],
+    flexibilityParts: ['肩関節', '股関節', '足関節', 'その他'],
   },
   {
     id: 'pain', title: '痛みについて', kind: 'painDetail',
@@ -73,13 +76,24 @@ const questionnaireItems: readonly QuestionnaireItem[] = [
     timings: ['安静時', '動作時', '朝方', '夕方以降', '常に'],
   },
   { id: 'daily', title: '日常生活', kind: 'single', options: ['座っている時間が長い', '階段や歩行が不安', '家事や仕事で疲れやすい', '特に困っていない'] },
-  { id: 'exercise', title: '運動習慣', kind: 'single', options: ['ほとんどしていない', '週に1〜2回', '週に3回以上', '毎日している'] },
+  {
+    id: 'exercise', title: '運動習慣', kind: 'single', options: ['ほとんどしていない', '週に1〜2回', '週に3回以上', '毎日している'],
+    detailFields: {
+      'ほとんどしていない': { id: 'currentExercise', label: 'どんな運動をしていますか？', optional: true, placeholder: '例：散歩、体操' },
+      '週に1〜2回': { id: 'currentExercise', label: 'どんな運動をしていますか？', optional: true, placeholder: '例：散歩、体操' },
+      '週に3回以上': { id: 'currentExercise', label: 'どんな運動をしていますか？', optional: true, placeholder: '例：散歩、体操' },
+      '毎日している': { id: 'currentExercise', label: 'どんな運動をしていますか？', optional: true, placeholder: '例：散歩、体操' },
+    },
+  },
   { id: 'environment', title: '運動環境', kind: 'single', options: ['自宅で運動したい', '屋外で運動できる', '施設を利用できる', '環境について相談したい'] },
   {
     id: 'safety', title: '安全確認', kind: 'checklist', questions: [
-      '運動中に胸の痛みやめまいを感じたことがある',
+      '急に強く痛くなった痛みがある',
+      '急激な筋力低下や麻痺がある',
+      '強い胸痛がある',
+      '強い息苦しさがある',
+      '意識を失ったことがある',
       '医師から運動を制限されている',
-      '安静時にも息切れがある',
       '骨折や関節の手術を最近受けた',
     ],
   },
@@ -117,12 +131,28 @@ export default function App() {
   });
   const [gender, setGender] = useState('');
   const [questionnaireAnswers, setQuestionnaireAnswers] = useState<QuestionnaireAnswers>({});
+  const [isQuestionnaireLoaded, setIsQuestionnaireLoaded] = useState(false);
   const [selectedQuestionnaireItemId, setSelectedQuestionnaireItemId] = useState<string | null>(null);
   const [isLoginPasswordVisible, setIsLoginPasswordVisible] = useState(false);
   const [isPasswordVisible, setIsPasswordVisible] = useState(false);
   const [isPasswordConfirmationVisible, setIsPasswordConfirmationVisible] = useState(false);
   const [activeDateField, setActiveDateField] = useState<DateField | null>(null);
   const selectedQuestionnaireItem = questionnaireItems.find((item) => item.id === selectedQuestionnaireItemId);
+
+  useEffect(() => {
+    AsyncStorage.getItem(questionnaireAnswersStorageKey).then((storedAnswers) => {
+      if (storedAnswers) {
+        setQuestionnaireAnswers(JSON.parse(storedAnswers) as QuestionnaireAnswers);
+      }
+      setIsQuestionnaireLoaded(true);
+    }).catch(() => setIsQuestionnaireLoaded(true));
+  }, []);
+
+  useEffect(() => {
+    if (isQuestionnaireLoaded) {
+      AsyncStorage.setItem(questionnaireAnswersStorageKey, JSON.stringify(questionnaireAnswers)).catch(() => undefined);
+    }
+  }, [isQuestionnaireLoaded, questionnaireAnswers]);
 
   const datePickerOptions: Record<DateField, readonly string[]> = {
     birthYear: birthYears,
@@ -169,7 +199,14 @@ export default function App() {
   };
 
   const setQuestionnaireAnswer = (key: string, value: string) => {
-    setQuestionnaireAnswers((current) => ({ ...current, [key]: value }));
+    setQuestionnaireAnswers((current) => {
+      if (current[key] === value) {
+        const next = { ...current };
+        delete next[key];
+        return next;
+      }
+      return { ...current, [key]: value };
+    });
   };
 
   const toggleMultiSelectOption = (itemId: string, option: string) => {
@@ -209,8 +246,17 @@ export default function App() {
         }
         return true;
       }
-      case 'painDetail':
-        return Boolean(questionnaireAnswers[`${item.id}.part`] && questionnaireAnswers[`${item.id}.intensity`] && questionnaireAnswers[`${item.id}.timing`]);
+      case 'painDetail': {
+        const timing = questionnaireAnswers[`${item.id}.timing`];
+        return Boolean(
+          questionnaireAnswers[`${item.id}.part`]
+          && questionnaireAnswers[`${item.id}.intensity`]
+          && timing
+          && (timing !== '動作時' || questionnaireAnswers[`${item.id}.aggravatingMovement`]?.trim())
+          && questionnaireAnswers[`${item.id}.onset.value`]?.trim()
+          && questionnaireAnswers[`${item.id}.onset.unit`],
+        );
+      }
       case 'checklist':
         return item.questions.every((_, index) => Boolean(questionnaireAnswers[`${item.id}.${index}`]))
           && (!item.photo || Boolean(questionnaireAnswers[`${item.id}.${item.photo.id}`]));
@@ -375,7 +421,7 @@ export default function App() {
                         <Text style={[styles.answerButtonText, isSelected && styles.answerButtonTextSelected]}>{option}</Text>
                       </Pressable>
                       {option === '姿勢' && selectedQuestionnaireItem.postureParts && isSelected ? <View style={[styles.questionnaireMeasurement, styles.additionalConcernBlock]}>
-                        <Text style={styles.questionnaireMeasurementLabel}>気になる部位（複数選択）</Text>
+                        <Text style={styles.questionnaireMeasurementLabel}>気になる姿勢（複数選択）</Text>
                         <View style={styles.answerList}>
                           {selectedQuestionnaireItem.postureParts.map((part) => {
                             const partsKey = `${selectedQuestionnaireItem.id}.postureParts`;
@@ -424,9 +470,31 @@ export default function App() {
                 </View>
                 <Text style={[styles.questionnaireMeasurementLabel, styles.painSectionSpacing]}>発症・悪化のタイミング</Text>
                 <View style={styles.answerList}>
-                  {selectedQuestionnaireItem.timings.map((timing) => <Pressable key={timing} accessibilityRole="button" onPress={() => setQuestionnaireAnswer(`${selectedQuestionnaireItem.id}.timing`, timing)} style={[styles.answerButton, questionnaireAnswers[`${selectedQuestionnaireItem.id}.timing`] === timing && styles.answerButtonSelected]}>
-                    <Text style={[styles.answerButtonText, questionnaireAnswers[`${selectedQuestionnaireItem.id}.timing`] === timing && styles.answerButtonTextSelected]}>{timing}</Text>
-                  </Pressable>)}
+                  {selectedQuestionnaireItem.timings.map((timing) => <View key={timing}>
+                    <Pressable accessibilityRole="button" onPress={() => setQuestionnaireAnswer(`${selectedQuestionnaireItem.id}.timing`, timing)} style={[styles.answerButton, questionnaireAnswers[`${selectedQuestionnaireItem.id}.timing`] === timing && styles.answerButtonSelected]}>
+                      <Text style={[styles.answerButtonText, questionnaireAnswers[`${selectedQuestionnaireItem.id}.timing`] === timing && styles.answerButtonTextSelected]}>{timing}</Text>
+                    </Pressable>
+                    {timing === '動作時' && questionnaireAnswers[`${selectedQuestionnaireItem.id}.timing`] === '動作時' ? <View style={[styles.questionnaireMeasurement, styles.additionalConcernBlock]}>
+                      <Text style={styles.questionnaireMeasurementLabel}>何をすると悪化する？</Text>
+                      <TextInput multiline onChangeText={(value) => setQuestionnaireAnswer(`${selectedQuestionnaireItem.id}.aggravatingMovement`, value)} placeholder="例：階段を上ると痛い" placeholderTextColor={colors.subText} style={styles.questionnaireFreeTextInput} value={questionnaireAnswers[`${selectedQuestionnaireItem.id}.aggravatingMovement`] ?? ''} />
+                    </View> : null}
+                  </View>)}
+                </View>
+                <View style={[styles.questionnaireMeasurement, styles.painOnsetBlock]}>
+                  <Text style={styles.questionnaireMeasurementLabel}>いつから痛い？</Text>
+                  <View style={styles.questionnaireMeasurementInputRow}>
+                    <TextInput keyboardType="number-pad" onChangeText={(value) => setQuestionnaireAnswer(`${selectedQuestionnaireItem.id}.onset.value`, value)} placeholder="数字を入力" placeholderTextColor={colors.subText} style={styles.painOnsetInput} value={questionnaireAnswers[`${selectedQuestionnaireItem.id}.onset.value`] ?? ''} />
+                    <Text style={styles.questionnaireUnit}>前から</Text>
+                  </View>
+                  <View style={[styles.answerList, styles.painOnsetUnitList]}>
+                    {[
+                      ['years', '年'],
+                      ['months', 'カ月'],
+                      ['days', '日'],
+                    ].map(([unit, label]) => <Pressable key={unit} accessibilityRole="button" accessibilityState={{ selected: questionnaireAnswers[`${selectedQuestionnaireItem.id}.onset.unit`] === unit }} onPress={() => setQuestionnaireAnswer(`${selectedQuestionnaireItem.id}.onset.unit`, unit)} style={[styles.answerButton, questionnaireAnswers[`${selectedQuestionnaireItem.id}.onset.unit`] === unit && styles.answerButtonSelected]}>
+                      <Text style={[styles.answerButtonText, questionnaireAnswers[`${selectedQuestionnaireItem.id}.onset.unit`] === unit && styles.answerButtonTextSelected]}>{label}</Text>
+                    </Pressable>)}
+                  </View>
                 </View>
               </> : null}
 
@@ -532,7 +600,7 @@ export default function App() {
             </Pressable>
           </View>
           <Text style={styles.label}>性別</Text>
-          <View style={styles.genderRow}>{['女性', '男性', '回答しない'].map((option) => <Pressable key={option} accessibilityRole="button" onPress={() => setGender(option)} style={[styles.genderButton, gender === option && styles.genderButtonSelected]}><Text style={[styles.genderButtonText, gender === option && styles.genderButtonTextSelected]}>{option}</Text></Pressable>)}</View>
+          <View style={styles.genderRow}>{['女性', '男性', '回答しない'].map((option) => <Pressable key={option} accessibilityRole="button" accessibilityState={{ selected: gender === option }} onPress={() => setGender((current) => current === option ? '' : option)} style={[styles.genderButton, gender === option && styles.genderButtonSelected]}><Text style={[styles.genderButtonText, gender === option && styles.genderButtonTextSelected]}>{option}</Text></Pressable>)}</View>
           <Text style={styles.label}>生年月日</Text>
           <View style={styles.birthDateRow}>
             {(['birthYear', 'birthMonth', 'birthDay'] as const).map((field) => <Pressable accessibilityLabel={`${datePickerLabels[field]}を選択`} accessibilityRole="button" key={field} onPress={() => setActiveDateField(field)} style={styles.datePickerContainer}>
@@ -645,8 +713,11 @@ const styles = StyleSheet.create({
   fieldList: { gap: 16 },
   fieldBlock: {},
   painSectionSpacing: { marginTop: 16 },
+  painOnsetBlock: { marginTop: 16 },
+  painOnsetUnitList: { marginTop: 8 },
   painScaleRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   painScaleButton: { alignItems: 'center', backgroundColor: '#FFFFFF', borderColor: colors.main, borderRadius: 7, borderWidth: 1, height: 42, justifyContent: 'center', width: 42 },
+  painOnsetInput: { backgroundColor: '#FFFFFF', borderColor: colors.main, borderRadius: 7, borderWidth: 1, color: colors.mainText, flex: 1, fontSize: 14, height: 42, paddingHorizontal: 8 },
   checklist: { gap: 16 },
   checklistRow: { gap: 8 },
   checklistQuestion: { color: colors.mainText, fontSize: 14, fontWeight: '600', lineHeight: 20 },
