@@ -187,6 +187,7 @@ export default function App() {
 
     if (error) {
       console.error('signInWithPassword error:', error.message, error.status);
+
       if (error.message.toLowerCase().includes('email not confirmed')) {
         setMessage('確認メールのリンクを開いてメールアドレスを認証してから、もう一度ログインしてください。');
         return;
@@ -330,11 +331,13 @@ export default function App() {
     });
 
     if (error) {
+      console.error('signUp error:', error.message, error.status);
       setMessage(error.message);
       return;
     }
 
     if (!data.session) {
+      console.log('signUp succeeded without session, user:', data.user?.id, 'identities:', data.user?.identities?.length);
       setMessage('確認メールを送信しました。メールを確認してからログインしてください。');
       setScreen('login');
       return;
@@ -554,7 +557,7 @@ export default function App() {
             <TextInput autoCapitalize="none" autoComplete="email" keyboardType="email-address" onChangeText={setEmail} placeholder="example@email.com" placeholderTextColor="#9AA29A" style={styles.input} value={email} />
             <Text style={styles.label}>パスワード</Text>
             <View style={styles.passwordInputWrapper}>
-              <TextInput autoComplete="password" onChangeText={setPassword} placeholder="パスワードを入力" placeholderTextColor="#9AA29A" secureTextEntry={!isLoginPasswordVisible} style={[styles.input, styles.passwordInput]} value={password} />
+              <TextInput autoCapitalize="none" autoComplete="password" onChangeText={setPassword} placeholder="パスワードを入力" placeholderTextColor="#9AA29A" secureTextEntry={!isLoginPasswordVisible} style={[styles.input, styles.passwordInput]} value={password} />
               <Pressable accessibilityLabel={isLoginPasswordVisible ? 'パスワードを隠す' : 'パスワードを表示'} accessibilityRole="button" hitSlop={10} onPress={() => setIsLoginPasswordVisible((current) => !current)} style={styles.passwordVisibilityButton}>
                 <Ionicons color="#9AA29A" name={isLoginPasswordVisible ? 'eye-off-outline' : 'eye-outline'} size={22} />
               </Pressable>
@@ -587,14 +590,14 @@ export default function App() {
           <Text style={styles.label}>パスワード</Text>
           <Text style={styles.passwordHint}>パスワードは英大文字・英小文字・数字をそれぞれ含む8文字以上で入力してください。</Text>
           <View style={styles.passwordInputWrapper}>
-            <TextInput autoComplete="new-password" onChangeText={(value) => updateRegistration('password', value)} placeholder="パスワードを入力" placeholderTextColor={colors.subText} secureTextEntry={!isPasswordVisible} style={[styles.input, styles.passwordInput]} value={registration.password} />
+            <TextInput autoCapitalize="none" autoComplete="new-password" onChangeText={(value) => updateRegistration('password', value)} placeholder="パスワードを入力" placeholderTextColor={colors.subText} secureTextEntry={!isPasswordVisible} style={[styles.input, styles.passwordInput]} value={registration.password} />
             <Pressable accessibilityLabel={isPasswordVisible ? 'パスワードを隠す' : 'パスワードを表示'} accessibilityRole="button" hitSlop={10} onPress={() => setIsPasswordVisible((current) => !current)} style={styles.passwordVisibilityButton}>
               <Ionicons color={colors.subText} name={isPasswordVisible ? 'eye-off-outline' : 'eye-outline'} size={22} />
             </Pressable>
           </View>
           <Text style={styles.label}>パスワード（再度）</Text>
           <View style={styles.passwordInputWrapper}>
-            <TextInput onChangeText={(value) => updateRegistration('passwordConfirmation', value)} placeholder="パスワードを再入力" placeholderTextColor={colors.subText} secureTextEntry={!isPasswordConfirmationVisible} style={[styles.input, styles.passwordInput]} value={registration.passwordConfirmation} />
+            <TextInput autoCapitalize="none" onChangeText={(value) => updateRegistration('passwordConfirmation', value)} placeholder="パスワードを再入力" placeholderTextColor={colors.subText} secureTextEntry={!isPasswordConfirmationVisible} style={[styles.input, styles.passwordInput]} value={registration.passwordConfirmation} />
             <Pressable accessibilityLabel={isPasswordConfirmationVisible ? '確認用パスワードを隠す' : '確認用パスワードを表示'} accessibilityRole="button" hitSlop={10} onPress={() => setIsPasswordConfirmationVisible((current) => !current)} style={styles.passwordVisibilityButton}>
               <Ionicons color={colors.subText} name={isPasswordConfirmationVisible ? 'eye-off-outline' : 'eye-outline'} size={22} />
             </Pressable>
