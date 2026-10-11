@@ -39,9 +39,10 @@ type QuestionnaireFieldConfig = {
 type QuestionnaireItem =
   | { detailFields?: Readonly<Record<string, QuestionnaireFieldConfig>>; id: string; kind: 'single'; options: readonly string[]; title: string }
   | { fields: readonly QuestionnaireFieldConfig[]; id: string; kind: 'fields'; title: string }
+  | { id: string; kind: 'individualDiagnosis'; title: string }
   | { flexibilityParts?: readonly string[]; id: string; kind: 'multiSelect'; options: readonly string[]; postureParts?: readonly string[]; title: string }
   | { id: string; intensityLevels: readonly string[]; kind: 'painDetail'; parts: readonly string[]; timings: readonly string[]; title: string }
-  | { id: string; kind: 'checklist'; photo?: { id: string; label: string }; questions: readonly string[]; title: string };
+  | { id: string; kind: 'checklist'; photos?: readonly { id: string; label: string }[]; questions: readonly string[]; title: string };
 
 const colors = {
   main: '#78B7C5',
@@ -49,6 +50,8 @@ const colors = {
   sub: '#E6F2F5',
   subText: '#8CA1AF',
 } as const;
+
+const individualDiagnosisPageId = 'individualDiagnosis';
 
 const questionnaireItems: readonly QuestionnaireItem[] = [
   {
@@ -85,7 +88,7 @@ const questionnaireItems: readonly QuestionnaireItem[] = [
       '毎日している': { id: 'currentExercise', label: 'どんな運動をしていますか？', optional: true, placeholder: '例：散歩、体操' },
     },
   },
-  { id: 'environment', title: '運動環境', kind: 'single', options: ['自宅で運動したい', '屋外で運動できる', '施設を利用できる', '環境について相談したい'] },
+  { id: 'environment', title: '運動環境', kind: 'single', options: ['自宅で運動したい', '屋外で運動できる', '施設を利用できる'] },
   {
     id: 'safety', title: '安全確認', kind: 'checklist', questions: [
       '急に強く痛くなった痛みがある',
@@ -104,7 +107,11 @@ const questionnaireItems: readonly QuestionnaireItem[] = [
       '片足立ちで10秒以上バランスを保てる',
       'しゃがんだ姿勢から自力で立ち上がれる',
     ],
-    photo: { id: 'posturePhoto', label: '姿勢を撮影してください' },
+    photos: [
+      { id: 'front', label: '正面を撮影してください' },
+      { id: 'right', label: '右側面を撮影してください' },
+      { id: 'left', label: '左側面を撮影してください' },
+    ],
   },
   {
     id: 'goal', title: '目標', kind: 'single', options: ['体力をつけたい', '減量', '増量', '趣味活動再開', 'その他'],
@@ -116,6 +123,12 @@ const questionnaireItems: readonly QuestionnaireItem[] = [
     },
   },
 ] as const;
+
+const individualDiagnosisItem: QuestionnaireItem = {
+  id: individualDiagnosisPageId,
+  title: '個別診断',
+  kind: 'individualDiagnosis',
+};
 
 const birthYears = Array.from({ length: 101 }, (_, index) => String(new Date().getFullYear() - index));
 const birthMonths = Array.from({ length: 12 }, (_, index) => String(index + 1));
@@ -133,11 +146,15 @@ export default function App() {
   const [questionnaireAnswers, setQuestionnaireAnswers] = useState<QuestionnaireAnswers>({});
   const [isQuestionnaireLoaded, setIsQuestionnaireLoaded] = useState(false);
   const [selectedQuestionnaireItemId, setSelectedQuestionnaireItemId] = useState<string | null>(null);
+  const [selectedPosturePhotoId, setSelectedPosturePhotoId] = useState('front');
+  const [isPosturePhotoCaptureOpen, setIsPosturePhotoCaptureOpen] = useState(false);
   const [isLoginPasswordVisible, setIsLoginPasswordVisible] = useState(false);
   const [isPasswordVisible, setIsPasswordVisible] = useState(false);
   const [isPasswordConfirmationVisible, setIsPasswordConfirmationVisible] = useState(false);
   const [activeDateField, setActiveDateField] = useState<DateField | null>(null);
-  const selectedQuestionnaireItem = questionnaireItems.find((item) => item.id === selectedQuestionnaireItemId);
+  const selectedQuestionnaireItem = selectedQuestionnaireItemId === individualDiagnosisPageId
+    ? individualDiagnosisItem
+    : questionnaireItems.find((item) => item.id === selectedQuestionnaireItemId);
 
   useEffect(() => {
     AsyncStorage.getItem(questionnaireAnswersStorageKey).then((storedAnswers) => {
@@ -210,6 +227,55 @@ export default function App() {
     });
   };
 
+  const getPainPresence = (itemId: string) => {
+    const presence = questionnaireAnswers[`${itemId}.presence`];
+    if (presence) return presence;
+    const detailKeys = ['part', 'intensity', 'timing', 'onset.value', 'onset.unit', 'aggravatingMovement'];
+    return detailKeys.some((key) => Boolean(questionnaireAnswers[`${itemId}.${key}`])) ? 'あり' : '';
+  };
+
+  const setPainPresence = (itemId: string, presence: string) => {
+    setQuestionnaireAnswers((current) => ({ ...current, [`${itemId}.presence`]: presence }));
+  };
+
+  const getIndividualDiagnosisContext = () => {
+    const hasPain = getPainPresence('pain') === 'あり';
+    const painPart = hasPain ? questionnaireAnswers['pain.part'] : '';
+    const bodyOptions = questionnaireAnswers['body.options']?.split('|') ?? [];
+    const postureParts = questionnaireAnswers['body.postureParts']?.split('|') ?? [];
+    const flexibilityParts = questionnaireAnswers['body.flexibilityParts']?.split('|') ?? [];
+    const hasNeckShoulderQuestions = hasPain && painPart === '首・肩';
+    const hasKneeQuestions = painPart === '膝';
+    const posturePartsToCheck = postureParts;
+    const hasSideQuestion = hasPain || bodyOptions.includes('肩こり') || flexibilityParts.length > 0;
+
+    return {
+      flexibilityParts,
+      hasPain,
+      hasKneeQuestions,
+      hasNeckShoulderQuestions,
+      hasQuestions: hasSideQuestion || hasNeckShoulderQuestions || hasKneeQuestions || posturePartsToCheck.length > 0 || flexibilityParts.length > 0,
+      hasSideQuestion,
+      posturePartsToCheck,
+    };
+  };
+
+  const isIndividualDiagnosisAnswered = () => {
+    const context = getIndividualDiagnosisContext();
+    if (!context.hasQuestions) return true;
+
+    const neckMovement = questionnaireAnswers['individualDiagnosis.neckMovement'];
+    return (!context.hasSideQuestion || Boolean(questionnaireAnswers['individualDiagnosis.side']))
+      && (!context.hasNeckShoulderQuestions || Boolean(
+        neckMovement
+        && (neckMovement !== 'できない' || questionnaireAnswers['individualDiagnosis.neckPainDirections'])
+        && questionnaireAnswers['individualDiagnosis.armRaise'],
+      ))
+      && (!context.hasKneeQuestions || Boolean(questionnaireAnswers['individualDiagnosis.kneeSquat'] && questionnaireAnswers['individualDiagnosis.kneeStairs']))
+      && (context.posturePartsToCheck.length === 0 || context.posturePartsToCheck.every((part) => Boolean(questionnaireAnswers[`individualDiagnosis.posture.${part}`])))
+      && context.flexibilityParts.every((part) => Boolean(questionnaireAnswers[`individualDiagnosis.flexibility.${part}`]));
+  };
+
   const toggleMultiSelectOption = (itemId: string, option: string) => {
     toggleQuestionnaireList(`${itemId}.options`, option, option === '特になし');
   };
@@ -226,6 +292,18 @@ export default function App() {
     });
   };
 
+  const renderDiagnosisChoices = (key: string, options: readonly string[], multiple = false) => {
+    const selectedOptions = questionnaireAnswers[key]?.split('|') ?? [];
+    return <View style={styles.answerList}>
+      {options.map((option) => {
+        const isSelected = multiple ? selectedOptions.includes(option) : questionnaireAnswers[key] === option;
+        return <Pressable key={option} accessibilityRole="button" accessibilityState={{ selected: isSelected }} onPress={() => multiple ? toggleQuestionnaireList(key, option) : setQuestionnaireAnswer(key, option)} style={[styles.answerButton, isSelected && styles.answerButtonSelected]}>
+          <Text style={[styles.answerButtonText, isSelected && styles.answerButtonTextSelected]}>{option}</Text>
+        </Pressable>;
+      })}
+    </View>;
+  };
+
   const isQuestionnaireItemAnswered = (item: QuestionnaireItem): boolean => {
     switch (item.kind) {
       case 'single': {
@@ -235,6 +313,8 @@ export default function App() {
       }
       case 'fields':
         return item.fields.every((field) => field.optional || Boolean(questionnaireAnswers[`${item.id}.${field.id}`]?.trim()));
+      case 'individualDiagnosis':
+        return isIndividualDiagnosisAnswered();
       case 'multiSelect': {
         const selected = questionnaireAnswers[`${item.id}.options`];
         const other = questionnaireAnswers[`${item.id}.other`];
@@ -248,6 +328,9 @@ export default function App() {
         return true;
       }
       case 'painDetail': {
+        const presence = getPainPresence(item.id);
+        if (presence === 'なし') return true;
+        if (presence !== 'あり') return false;
         const timing = questionnaireAnswers[`${item.id}.timing`];
         return Boolean(
           questionnaireAnswers[`${item.id}.part`]
@@ -260,31 +343,75 @@ export default function App() {
       }
       case 'checklist':
         return item.questions.every((_, index) => Boolean(questionnaireAnswers[`${item.id}.${index}`]))
-          && (!item.photo || Boolean(questionnaireAnswers[`${item.id}.${item.photo.id}`]));
+          && (!item.photos
+            || questionnaireAnswers[`${item.id}.photosLater`] === 'true'
+            || item.photos.every((photo) => Boolean(questionnaireAnswers[`${item.id}.${photo.id}`])));
       default:
         return false;
     }
+  };
+
+  const goToNextQuestionnaireItem = () => {
+    if (selectedQuestionnaireItemId === individualDiagnosisPageId) {
+      setSelectedQuestionnaireItemId(null);
+      return;
+    }
+    const currentIndex = questionnaireItems.findIndex((item) => item.id === selectedQuestionnaireItemId);
+    const nextItem = questionnaireItems[currentIndex + 1];
+    setSelectedQuestionnaireItemId(nextItem ? nextItem.id : null);
   };
 
   const updateRegistration = (field: keyof RegistrationFields, value: string) => {
     setRegistration((current) => ({ ...current, [field]: value }));
   };
 
-  const takePosturePhoto = async () => {
-    const permission = await ImagePicker.requestCameraPermissionsAsync();
-    if (!permission.granted) {
-      setMessage('姿勢の撮影にはカメラの許可が必要です。');
-      return;
-    }
+  const takePosturePhoto = async (itemId: string, photoId: string) => {
+    console.log('takePosturePhoto: pressed', photoId);
+    try {
+      const permission = await ImagePicker.requestCameraPermissionsAsync();
+      console.log('takePosturePhoto: permission result', permission);
+      if (!permission.granted) {
+        setMessage('姿勢の撮影にはカメラの許可が必要です。');
+        return;
+      }
 
-    const result = await ImagePicker.launchCameraAsync({
-      cameraType: ImagePicker.CameraType.back,
-      mediaTypes: ['images'],
-      quality: 0.8,
-    });
-    if (!result.canceled) {
-      setQuestionnaireAnswer('physicalCheck.posturePhoto', result.assets[0].uri);
-      setMessage('');
+      const result = await ImagePicker.launchCameraAsync({
+        mediaTypes: ['images'],
+        quality: 0.8,
+      });
+      console.log('takePosturePhoto: launchCameraAsync result', result.canceled);
+      if (!result.canceled) {
+        setQuestionnaireAnswer(`${itemId}.${photoId}`, result.assets[0].uri);
+        setMessage('');
+      }
+    } catch (err) {
+      console.error('takePosturePhoto error:', err);
+      setMessage('カメラの起動に失敗しました。');
+    }
+  };
+
+  const pickPosturePhoto = async (itemId: string, photoId: string) => {
+    console.log('pickPosturePhoto: pressed', photoId);
+    try {
+      const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      console.log('pickPosturePhoto: permission result', permission);
+      if (!permission.granted) {
+        setMessage('写真の選択にはカメラロールへのアクセス許可が必要です。');
+        return;
+      }
+
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        quality: 0.8,
+      });
+      console.log('pickPosturePhoto: launchImageLibraryAsync result', result.canceled);
+      if (!result.canceled) {
+        setQuestionnaireAnswer(`${itemId}.${photoId}`, result.assets[0].uri);
+        setMessage('');
+      }
+    } catch (err) {
+      console.error('pickPosturePhoto error:', err);
+      setMessage('カメラロールからの選択に失敗しました。');
     }
   };
 
@@ -459,6 +586,13 @@ export default function App() {
               </> : null}
 
               {selectedQuestionnaireItem.kind === 'painDetail' ? <>
+                <Text style={styles.questionnaireMeasurementLabel}>痛みはありますか？</Text>
+                <View style={[styles.checklistAnswerRow, styles.painPresenceRow]}>
+                  {['なし', 'あり'].map((option) => <Pressable key={option} accessibilityRole="button" accessibilityState={{ selected: getPainPresence(selectedQuestionnaireItem.id) === option }} onPress={() => setPainPresence(selectedQuestionnaireItem.id, option)} style={[styles.checklistOptionButton, getPainPresence(selectedQuestionnaireItem.id) === option && styles.answerButtonSelected]}>
+                    <Text style={[styles.answerButtonText, getPainPresence(selectedQuestionnaireItem.id) === option && styles.answerButtonTextSelected]}>{option}</Text>
+                  </Pressable>)}
+                </View>
+                {getPainPresence(selectedQuestionnaireItem.id) === 'あり' ? <>
                 <Text style={styles.questionnaireMeasurementLabel}>痛みの部位</Text>
                 <View style={styles.answerList}>
                   {selectedQuestionnaireItem.parts.map((part) => <Pressable key={part} accessibilityRole="button" onPress={() => setQuestionnaireAnswer(`${selectedQuestionnaireItem.id}.part`, part)} style={[styles.answerButton, questionnaireAnswers[`${selectedQuestionnaireItem.id}.part`] === part && styles.answerButtonSelected]}>
@@ -499,7 +633,52 @@ export default function App() {
                     </Pressable>)}
                   </View>
                 </View>
+                </> : null}
               </> : null}
+
+              {selectedQuestionnaireItem.kind === 'individualDiagnosis' ? (() => {
+                const context = getIndividualDiagnosisContext();
+                return <View style={styles.fieldList}>
+                  {!context.hasQuestions ? <Text style={styles.checklistQuestion}>選択された痛み・悩みの部位に応じた追加質問はありません。</Text> : null}
+                  {context.hasSideQuestion ? <View style={styles.fieldBlock}>
+                    {context.hasPain ? <Text style={styles.questionnaireMeasurementLabel}>痛みについて教えてください。</Text> : null}
+                    <Text style={styles.questionnaireMeasurementLabel}>{context.hasPain ? '左右どちらかが痛いですか？' : '左右どちらが気になりますか？'}</Text>
+                    {renderDiagnosisChoices('individualDiagnosis.side', ['左側', '右側', '両側'])}
+                  </View> : null}
+                  {context.hasNeckShoulderQuestions ? <>
+                    <View style={styles.fieldBlock}>
+                      <Text style={styles.questionnaireMeasurementLabel}>首を前後・左右へ傾けることができますか？</Text>
+                      {renderDiagnosisChoices('individualDiagnosis.neckMovement', ['できる', 'できない'])}
+                    </View>
+                    {questionnaireAnswers['individualDiagnosis.neckMovement'] === 'できない' ? <View style={styles.fieldBlock}>
+                      <Text style={styles.questionnaireMeasurementLabel}>どの方向で痛みますか？（複数選択）</Text>
+                      {renderDiagnosisChoices('individualDiagnosis.neckPainDirections', ['前', '後ろ', '左', '右'], true)}
+                    </View> : null}
+                    <View style={styles.fieldBlock}>
+                      <Text style={styles.questionnaireMeasurementLabel}>両腕をどこまで上げられますか？</Text>
+                      {renderDiagnosisChoices('individualDiagnosis.armRaise', ['できない', 'お腹の位置まで挙げられる', '目の高さまで挙げられる', '耳元まで挙げられる'])}
+                    </View>
+                  </> : null}
+                  {context.hasKneeQuestions ? <>
+                    <View style={styles.fieldBlock}>
+                      <Text style={styles.questionnaireMeasurementLabel}>しゃがみ込みができますか？</Text>
+                      {renderDiagnosisChoices('individualDiagnosis.kneeSquat', ['できない', 'できる', '痛みがある'])}
+                    </View>
+                    <View style={styles.fieldBlock}>
+                      <Text style={styles.questionnaireMeasurementLabel}>階段の昇り降りはできますか？</Text>
+                      {renderDiagnosisChoices('individualDiagnosis.kneeStairs', ['できる', 'できない', '降りる時に痛い', '昇る時に痛い'])}
+                    </View>
+                  </> : null}
+                  {context.posturePartsToCheck.map((part) => <View key={part} style={styles.fieldBlock}>
+                    <Text style={styles.questionnaireMeasurementLabel}>{part}の姿勢を自分で整えることができますか？</Text>
+                    {renderDiagnosisChoices(`individualDiagnosis.posture.${part}`, ['できる', '少しならできる', '難しい'])}
+                  </View>)}
+                  {context.flexibilityParts.map((part) => <View key={part} style={styles.fieldBlock}>
+                    <Text style={styles.questionnaireMeasurementLabel}>{part}はどの程度動かしにくいですか？</Text>
+                    {renderDiagnosisChoices(`individualDiagnosis.flexibility.${part}`, ['問題なく動かせる', '少し動かしにくい', '強く動かしにくい'])}
+                  </View>)}
+                </View>;
+              })() : null}
 
               {selectedQuestionnaireItem.kind === 'checklist' ? <View style={styles.checklist}>
                 {selectedQuestionnaireItem.questions.map((question, index) => {
@@ -515,15 +694,47 @@ export default function App() {
                 })}
               </View> : null}
             </View>
-            {selectedQuestionnaireItem.kind === 'checklist' && selectedQuestionnaireItem.photo ? <View style={styles.photoCaptureBlock}>
-              <Text style={styles.photoCaptureTitle}>姿勢の写真</Text>
-              <Text style={styles.checklistQuestion}>{selectedQuestionnaireItem.photo.label}</Text>
-              <Pressable accessibilityRole="button" onPress={takePosturePhoto} style={styles.photoCaptureButton}>
-                <Ionicons color={colors.mainText} name="camera-outline" size={20} />
-                <Text style={styles.photoCaptureButtonText}>{questionnaireAnswers[`${selectedQuestionnaireItem.id}.${selectedQuestionnaireItem.photo.id}`] ? '撮り直す' : 'カメラを起動'}</Text>
-              </Pressable>
-              {questionnaireAnswers[`${selectedQuestionnaireItem.id}.${selectedQuestionnaireItem.photo.id}`] ? <Image accessibilityLabel="撮影した姿勢写真" source={{ uri: questionnaireAnswers[`${selectedQuestionnaireItem.id}.${selectedQuestionnaireItem.photo.id}`] }} style={styles.posturePhoto} /> : null}
-            </View> : null}
+            {selectedQuestionnaireItem.kind === 'checklist' && selectedQuestionnaireItem.photos ? <>
+              <View style={styles.photoCaptureBlock}>
+                <Text style={styles.photoCaptureTitle}>写真撮影</Text>
+                <Pressable accessibilityRole="button" accessibilityState={{ expanded: isPosturePhotoCaptureOpen }} onPress={() => setIsPosturePhotoCaptureOpen((current) => !current)} style={styles.photoCaptureEntryButton}>
+                  <Ionicons color={colors.mainText} name="camera-outline" size={20} />
+                  <Text style={styles.photoCaptureButtonText}>{isPosturePhotoCaptureOpen ? '撮影操作を閉じる' : '撮影・写真を選択'}</Text>
+                  <Ionicons color={colors.subText} name={isPosturePhotoCaptureOpen ? 'chevron-up' : 'chevron-down'} size={18} />
+                </Pressable>
+                <Pressable accessibilityRole="checkbox" accessibilityState={{ checked: questionnaireAnswers[`${selectedQuestionnaireItem.id}.photosLater`] === 'true' }} onPress={() => setQuestionnaireAnswer(`${selectedQuestionnaireItem.id}.photosLater`, 'true')} style={styles.photoLaterButton}>
+                  <Ionicons color={colors.main} name={questionnaireAnswers[`${selectedQuestionnaireItem.id}.photosLater`] === 'true' ? 'checkbox' : 'square-outline'} size={21} />
+                  <Text style={styles.photoLaterButtonText}>写真撮影は後で実施する</Text>
+                </Pressable>
+                {isPosturePhotoCaptureOpen ? <>
+                  <View style={styles.photoAngleRow}>
+                    {selectedQuestionnaireItem.photos.map((photo) => <Pressable key={photo.id} accessibilityRole="button" accessibilityState={{ selected: selectedPosturePhotoId === photo.id }} onPress={() => setSelectedPosturePhotoId(photo.id)} style={[styles.photoAngleButton, selectedPosturePhotoId === photo.id && styles.photoAngleButtonSelected]}>
+                      <Text style={[styles.photoAngleButtonText, selectedPosturePhotoId === photo.id && styles.photoAngleButtonTextSelected]}>{photo.label.replace('を撮影してください', '')}</Text>
+                    </Pressable>)}
+                  </View>
+                  <View style={styles.photoCaptureButtonRow}>
+                    <Pressable accessibilityRole="button" onPress={() => takePosturePhoto(selectedQuestionnaireItem.id, selectedPosturePhotoId)} style={[styles.photoCaptureButton, styles.photoCaptureButtonHalf]}>
+                      <Ionicons color={colors.mainText} name="camera-outline" size={20} />
+                      <Text style={styles.photoCaptureButtonText}>カメラで撮影</Text>
+                    </Pressable>
+                    <Pressable accessibilityRole="button" onPress={() => pickPosturePhoto(selectedQuestionnaireItem.id, selectedPosturePhotoId)} style={[styles.photoCaptureButton, styles.photoCaptureButtonHalf]}>
+                      <Ionicons color={colors.mainText} name="images-outline" size={20} />
+                      <Text style={styles.photoCaptureButtonText}>写真ライブラリから選択</Text>
+                    </Pressable>
+                  </View>
+                  {(() => {
+                    const selectedPhoto = selectedQuestionnaireItem.photos.find((photo) => photo.id === selectedPosturePhotoId);
+                    const photoUri = questionnaireAnswers[`${selectedQuestionnaireItem.id}.${selectedPosturePhotoId}`];
+                    return photoUri && selectedPhoto ? <Image accessibilityLabel={selectedPhoto.label} source={{ uri: photoUri }} style={styles.posturePhoto} /> : null;
+                  })()}
+                </> : null}
+              </View>
+            </> : null}
+            {message ? <Text style={styles.questionnaireMessage}>{`※${message}`}</Text> : null}
+            {isQuestionnaireItemAnswered(selectedQuestionnaireItem)
+              && (selectedQuestionnaireItem.id !== 'goal' || questionnaireItems.every(isQuestionnaireItemAnswered)) ? <Pressable accessibilityRole="button" onPress={goToNextQuestionnaireItem} style={({ pressed }) => [styles.loginButton, styles.questionnaireNextButton, pressed && styles.pressed]}>
+              <Text style={styles.loginButtonText}>{selectedQuestionnaireItem.id === individualDiagnosisPageId ? '完了' : '次へ'}</Text>
+            </Pressable> : null}
           </> : <View style={styles.questionnaireCategoryList}>{questionnaireItems.map((item, index) => {
             const isAnswered = isQuestionnaireItemAnswered(item);
             return <Pressable key={item.id} accessibilityRole="button" onPress={() => setSelectedQuestionnaireItemId(item.id)} style={[styles.questionnaireCategoryButton, isAnswered && styles.questionnaireCategoryButtonAnswered]}>
@@ -532,6 +743,9 @@ export default function App() {
               {isAnswered ? <Text style={styles.answeredLabel}>回答済み</Text> : <Ionicons color={colors.subText} name="chevron-forward" size={20} />}
             </Pressable>;
           })}</View>}
+          {!selectedQuestionnaireItem && questionnaireItems.every(isQuestionnaireItemAnswered) ? <Pressable accessibilityRole="button" onPress={() => setSelectedQuestionnaireItemId(individualDiagnosisPageId)} style={({ pressed }) => [styles.loginButton, styles.questionnaireNextButton, pressed && styles.pressed]}>
+            <Text style={styles.loginButtonText}>個別診断へ</Text>
+          </Pressable> : null}
         </ScrollView> : screen === 'login' ? <View style={[styles.content, styles.loginContent]}>
           <View style={styles.brandBlock}>
             <View accessible accessibilityLabel="歩く女性のイラスト" style={styles.illustration}>
@@ -685,7 +899,8 @@ const styles = StyleSheet.create({
   measurementRow: { alignItems: 'center', flexDirection: 'row' },
   measurementInput: { flex: 1 },
   unit: { color: '#405044', fontSize: 14, fontWeight: '700', marginBottom: 20, marginLeft: 12, width: 25 },
-  message: { color: '#9A5D3F', fontSize: 13, lineHeight: 19, marginBottom: 14, marginTop: -6 },
+  message: { color: '#C0392B', fontSize: 13, lineHeight: 19, marginBottom: 14, marginTop: -6 },
+  questionnaireMessage: { color: '#C0392B', fontSize: 20, fontWeight: '700', lineHeight: 26, marginBottom: 14, marginTop: 16 },
   loginButton: { alignItems: 'center', backgroundColor: colors.main, borderRadius: 8, height: 52, justifyContent: 'center', marginTop: 4 },
   loginButtonText: { color: '#FFFFFF', fontSize: 16, fontWeight: '700' },
   signUpButton: { alignItems: 'center', borderColor: colors.main, borderRadius: 8, borderWidth: 1, height: 52, justifyContent: 'center', marginTop: 12 },
@@ -701,6 +916,7 @@ const styles = StyleSheet.create({
   questionnaireCategoryButtonAnswered: { borderColor: colors.main, borderWidth: 2 },
   questionnaireBackButton: { alignItems: 'center', alignSelf: 'flex-start', flexDirection: 'row', marginBottom: 16 },
   questionnaireBackButtonText: { color: colors.mainText, fontSize: 13, fontWeight: '700', marginLeft: 2 },
+  questionnaireNextButton: { marginTop: 20 },
   questionnaireCard: { backgroundColor: colors.sub, borderRadius: 8, marginBottom: 14, padding: 16 },
   questionnaireCardAnswered: { borderColor: colors.main, borderWidth: 2 },
   questionnaireCardHeader: { alignItems: 'center', flexDirection: 'row', marginBottom: 14 },
@@ -716,6 +932,7 @@ const styles = StyleSheet.create({
   fieldList: { gap: 16 },
   fieldBlock: {},
   painSectionSpacing: { marginTop: 16 },
+  painPresenceRow: { marginBottom: 16 },
   painOnsetBlock: { marginTop: 16 },
   painOnsetUnitList: { marginTop: 8 },
   painScaleRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
@@ -728,7 +945,17 @@ const styles = StyleSheet.create({
   checklistOptionButton: { alignItems: 'center', backgroundColor: '#FFFFFF', borderColor: colors.main, borderRadius: 7, borderWidth: 1, flex: 1, height: 42, justifyContent: 'center' },
   photoCaptureBlock: { backgroundColor: '#E6F2F5', borderColor: colors.main, borderRadius: 8, borderWidth: 1, gap: 10, marginTop: 16, padding: 12 },
   photoCaptureTitle: { color: colors.mainText, fontSize: 16, fontWeight: '700' },
+  photoCaptureEntryButton: { alignItems: 'center', backgroundColor: '#FFFFFF', borderColor: colors.main, borderRadius: 7, borderWidth: 1, flexDirection: 'row', gap: 8, justifyContent: 'center', minHeight: 46, paddingHorizontal: 12 },
+  photoLaterButton: { alignItems: 'center', flexDirection: 'row', gap: 8, minHeight: 42, paddingHorizontal: 4 },
+  photoLaterButtonText: { color: colors.mainText, fontSize: 13, fontWeight: '600' },
+  photoAngleRow: { flexDirection: 'row', gap: 8 },
+  photoAngleButton: { alignItems: 'center', backgroundColor: '#FFFFFF', borderColor: colors.main, borderRadius: 7, borderWidth: 1, flex: 1, justifyContent: 'center', minHeight: 42, paddingHorizontal: 6 },
+  photoAngleButtonSelected: { backgroundColor: colors.main, borderColor: colors.main },
+  photoAngleButtonText: { color: colors.mainText, fontSize: 12, fontWeight: '700' },
+  photoAngleButtonTextSelected: { color: '#FFFFFF' },
   photoCaptureButton: { alignItems: 'center', backgroundColor: '#FFFFFF', borderColor: colors.main, borderRadius: 7, borderWidth: 1, flexDirection: 'row', gap: 8, justifyContent: 'center', minHeight: 42, paddingHorizontal: 12 },
+  photoCaptureButtonRow: { flexDirection: 'row', gap: 8 },
+  photoCaptureButtonHalf: { flex: 1 },
   photoCaptureButtonText: { color: colors.mainText, fontSize: 13, fontWeight: '700' },
   posturePhoto: { alignSelf: 'center', borderRadius: 7, height: 220, width: '100%' },
   questionnaireMeasurement: { flex: 1 },
